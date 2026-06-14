@@ -180,6 +180,27 @@ The Dockerfile installs dependencies before copying application code, uses a
 BuildKit pip cache mount, excludes tests/frontend/model weights from the build
 context, and copies only runtime source files into the final image.
 
+### Remote Docker Cache Verification
+
+This repo includes a manual GitHub Actions workflow so the cache check can run
+without Docker Desktop or WSL on Windows.
+
+1. Push this repo to GitHub.
+2. Open the repo's **Actions** tab.
+3. Select **Docker Cache Verification**.
+4. Click **Run workflow**.
+5. Open the completed run and check the **Second build with cache check** step.
+6. Screenshot the printed cache summary:
+
+```text
+Cached layers: X
+Total cacheable layers: Y
+Cache hit percentage: Z%
+```
+
+The workflow also uploads `second-build.log` and `cache-summary.txt` as the
+`docker-cache-verification` artifact.
+
 ---
 
 ## Monitoring Metrics

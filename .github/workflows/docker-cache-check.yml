@@ -1,0 +1,68 @@
+name: Docker Cache Verification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docker-cache-check:
+    name: Build twice and measure cache hits
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: First build and export cache
+        run: |
+          docker buildx build \
+            --progress=plain \
+            --load \
+            --tag mento-backend:cache-test \
+            --cache-to type=local,dest=/tmp/mento-buildx-cache,mode=max \
+            .
+
+      - name: Second build with cache check
+        run: |
+          set -euo pipefail
+
+          docker buildx build \
+            --progress=plain \
+            --load \
+            --tag mento-backend:cache-test \
+            --cache-from type=local,src=/tmp/mento-buildx-cache \
+            . 2>&1 | tee second-build.log
+
+          awk '
+            /^#[0-9]+ \[/ && $0 !~ /\[internal\]/ {
+              steps[$1] = 1
+            }
+            /^#[0-9]+ CACHED/ {
+              cached[$1] = 1
+            }
+            END {
+              for (id in steps) {
+                total += 1
+                if (id in cached) {
+                  hits += 1
+                }
+              }
+              percent = total ? int((hits * 100) / total) : 0
+
+              print "Cached layers: " hits
+              print "Total cacheable layers: " total
+              print "Cache hit percentage: " percent "%"
+            }
+          ' second-build.log | tee cache-summary.txt
+
+          cat cache-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload cache verification logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-cache-verification
+          path: |
+            second-build.log
+            cache-summary.txt
