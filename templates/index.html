@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ system_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="chat-panel" aria-label="Mento chat">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Mental health support</p>
+            <h1>Mento</h1>
+            <p class="slogan">Your Life Matters</p>
+          </div>
+          <div class="top-actions">
+            <div class="status-pill" id="status">Ready</div>
+            <button type="button" id="clear-button" class="ghost-button">Clear</button>
+          </div>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite">
+          <article class="message assistant">
+            <div class="bubble">Hello, I'm Mento. What's on your mind today?</div>
+          </article>
+        </div>
+
+        <form class="composer" id="chat-form">
+          <textarea id="message-input" name="message" rows="1" placeholder="Share what is on your mind..." autocomplete="off"></textarea>
+          <button type="submit" id="send-button" aria-label="Send message">
+            <span>Send</span>
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>
