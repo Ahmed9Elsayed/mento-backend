@@ -1,42 +1,53 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+FROM python:3.12-slim AS builder
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TOKENIZERS_PARALLELISM=false \
     HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
-# System deps for building wheels (torch/transformers) and curl for HF healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        git \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
 
-WORKDIR /app
-
-# Install Python dependencies first to leverage Docker layer caching
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt \
-    && pip install gunicorn
+RUN python -m venv "$VIRTUAL_ENV"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -r requirements.txt gunicorn
 
-# Copy application source
-COPY . /app
+FROM python:3.12-slim AS runtime
 
-# Hugging Face Spaces expects the app to listen on 0.0.0.0:7860
-ENV FLASK_RUN_HOST=0.0.0.0 \
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TOKENIZERS_PARALLELISM=false \
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
+    HF_HOME=/tmp/huggingface \
+    XDG_CACHE_HOME=/tmp/.cache \
+    USE_LOCAL_EMOTION_MODEL=false \
+    FLASK_RUN_HOST=0.0.0.0 \
     FLASK_RUN_PORT=7860 \
     FLASK_DEBUG=false
 
+WORKDIR /app
+
+RUN addgroup --system mento \
+    && adduser --system --ingroup mento --home /app mento \
+    && chown -R mento:mento /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=mento:mento app.py components.py feedback_service.py mento_pipeline.py prompts.py rag_service.py settings.py ./
+COPY --chown=mento:mento models/module1 ./models/module1
+
+USER mento
+
 EXPOSE 7860
 
-# Disable local emotion model in the Space by default; it's heavy and not always needed.
-# Set USE_LOCAL_EMOTION_MODEL=true as a Space secret to opt in.
-ENV USE_LOCAL_EMOTION_MODEL=false
-
-# Use gunicorn with a single worker but multiple threads (matches threaded=True in app.py).
-# SSE streaming benefits from threads, not multiple workers (sticky sessions needed otherwise).
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:7860", \
      "--workers", "1", \

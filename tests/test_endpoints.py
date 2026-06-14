@@ -13,9 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app import BLANK_MESSAGE_RESPONSE, public_error
 from app import app as flask_app
-from app import public_error
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -50,7 +49,6 @@ def feedback_logger():
 
 def make_stream(*tokens: str, route: str = "rag_pipeline", emotion: str = "sadness"):
     """Helper: build the real pipeline stream event sequence."""
-    from dataclasses import asdict
     events = [
         # metadata event — wraps a RouteResult-like dict under "data"
         {
@@ -151,20 +149,27 @@ class TestChat:
         assert "session_id" in data
         assert len(data["session_id"]) > 0
 
-    def test_empty_message_returns_400(self, client, pipeline):
+    def test_empty_message_returns_listening_response(self, client, pipeline):
         with patch("app.get_pipeline", return_value=pipeline):
             response = client.post("/chat", json={"message": ""})
-        assert response.status_code == 400
+        data = response.get_json()
+        assert response.status_code == 200
+        assert data["response"] == BLANK_MESSAGE_RESPONSE
+        assert data["route"] == "blank_message"
 
-    def test_missing_message_field_returns_400(self, client, pipeline):
+    def test_missing_message_field_returns_listening_response(self, client, pipeline):
         with patch("app.get_pipeline", return_value=pipeline):
             response = client.post("/chat", json={})
-        assert response.status_code == 400
+        data = response.get_json()
+        assert response.status_code == 200
+        assert data["response"] == BLANK_MESSAGE_RESPONSE
 
-    def test_whitespace_only_message_returns_400(self, client, pipeline):
+    def test_whitespace_only_message_returns_listening_response(self, client, pipeline):
         with patch("app.get_pipeline", return_value=pipeline):
             response = client.post("/chat", json={"message": "   "})
-        assert response.status_code == 400
+        data = response.get_json()
+        assert response.status_code == 200
+        assert data["response"] == BLANK_MESSAGE_RESPONSE
 
     def test_pipeline_error_event_returns_500(self, client, pipeline):
         pipeline.stream.return_value = iter([
@@ -229,6 +234,16 @@ class TestChatStream:
         with patch("app.get_pipeline", return_value=pipeline):
             raw = client.post("/api/chat/stream", json={"message": "hi"}).data.decode()
         assert "hello" in raw
+
+    def test_blank_message_stream_returns_listening_response(self, client):
+        with patch("app.get_pipeline") as get_pipeline_mock:
+            raw = client.post(
+                "/api/chat/stream",
+                json={"message": "   ", "session_id": "blank-session"},
+            ).data.decode()
+        get_pipeline_mock.assert_not_called()
+        assert BLANK_MESSAGE_RESPONSE in raw
+        assert "blank_message" in raw
 
 
 # ---------------------------------------------------------------------------

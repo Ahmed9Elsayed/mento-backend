@@ -3,19 +3,32 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Generator
 from dataclasses import asdict, dataclass, field
-from typing import Any, Generator
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-from components import (CrisisDetector, EmotionDetector, LanguageDetector,
-                        crisis_response_for_language, crisis_response_language,
-                        crisis_support_prefix_for_language, heuristic_guardrail,
-                        is_followup_affirmation, is_mental_health_concern,
-                        is_system_identity_question)
-from prompts import (DIRECT_RESPONSE_SYSTEM_PROMPT, GUARDRAIL_SYSTEM_PROMPT,
-                     INTENT_SYSTEM_PROMPT, INTENTS)
+from components import (
+    CrisisDetector,
+    EmotionDetector,
+    LanguageDetector,
+    crisis_response_for_language,
+    crisis_response_language,
+    crisis_support_prefix_for_language,
+    heuristic_guardrail,
+    is_followup_affirmation,
+    is_mental_health_concern,
+    is_system_identity_question,
+)
+from prompts import (
+    BLANK_MESSAGE_RESPONSE,
+    DIRECT_RESPONSE_SYSTEM_PROMPT,
+    GUARDRAIL_SYSTEM_PROMPT,
+    INTENT_SYSTEM_PROMPT,
+    INTENTS,
+)
 from rag_service import RAGService
 from settings import Settings
 
@@ -248,7 +261,20 @@ class MentoPipeline:
     ) -> Generator[dict[str, Any], None, None]:
         user_text = (user_text or "").strip()
         if not user_text:
-            yield {"type": "error", "message": "Please enter a message."}
+            route = RouteResult(
+                route="blank_message",
+                intent="blank_message",
+                translated="",
+                language="en",
+                confidence=1.0,
+                layer_used="Layer 0 (Blank input)",
+                language_hint="en",
+                language_hint_confidence=1.0,
+                response=BLANK_MESSAGE_RESPONSE,
+            )
+            yield {"type": "metadata", "data": asdict(route)}
+            yield from self._emit_answer(BLANK_MESSAGE_RESPONSE)
+            yield {"type": "done", "data": asdict(route)}
             return
 
         route = self.classify(user_text, session_id)

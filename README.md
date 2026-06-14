@@ -133,7 +133,10 @@ The API starts on `http://0.0.0.0:5000`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Chat web interface (HTML) |
+| `GET` | `/` | Backend API information |
+| `GET` | `/health` | Service status, model config, Qdrant info, feedback config |
+| `POST` | `/chat` | Rubric-required JSON chat endpoint |
+| `POST` | `/feedback` | Rubric-required feedback endpoint |
 | `GET` | `/api/health` | Service status, model config, Qdrant info, feedback config |
 | `POST` | `/api/chat/stream` | Main chat — returns SSE stream of tokens |
 | `POST` | `/api/chat/clear` | Clears conversation memory for a session |
@@ -170,8 +173,12 @@ pytest tests/ -v
 
 ```bash
 docker build -t mento-backend .
-docker run -p 5000:5000 --env-file .env mento-backend
+docker run -p 7860:7860 --env-file .env mento-backend
 ```
+
+The Dockerfile installs dependencies before copying application code, uses a
+BuildKit pip cache mount, excludes tests/frontend/model weights from the build
+context, and copies only runtime source files into the final image.
 
 ---
 

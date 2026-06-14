@@ -6,11 +6,12 @@ import uuid
 from functools import lru_cache
 from typing import Any
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
 
 from feedback_service import FeedbackLogger, normalize_feedback
 from mento_pipeline import MentoPipeline
+from prompts import BLANK_MESSAGE_RESPONSE
 from settings import load_settings
 
 # ---------------------------------------------------------------------------
@@ -87,12 +88,23 @@ def public_error(exc: Exception) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Routes — static / UI
+# Routes — API information
 # ---------------------------------------------------------------------------
 @app.get("/")
-def index() -> str:
-    logger.info("GET / — serving chat UI")
-    return render_template("index.html", system_name="Mento")
+def index() -> Any:
+    logger.info("GET / — service information requested")
+    return jsonify(
+        {
+            "system": "Mento",
+            "status": "ok",
+            "message": "Mento backend API is running.",
+            "endpoints": {
+                "health": "/health",
+                "chat": "/chat",
+                "feedback": "/feedback",
+            },
+        }
+    )
 
 
 @app.get("/favicon.ico")
@@ -165,8 +177,16 @@ def chat() -> Any:
     session_id = str(payload.get("session_id") or uuid.uuid4())
 
     if not message:
-        logger.warning("POST /chat — empty message received, session=%s", session_id)
-        return jsonify({"status": "error", "message": "message is required"}), 400
+        logger.info("POST /chat — blank message received, session=%s", session_id)
+        return jsonify(
+            {
+                "response": BLANK_MESSAGE_RESPONSE,
+                "session_id": session_id,
+                "route": "blank_message",
+                "emotion": None,
+                "language": "en",
+            }
+        )
 
     logger.info("POST /chat — session=%s message_len=%d", session_id, len(message))
 
@@ -242,6 +262,8 @@ def chat_stream() -> Response:
     if last_mental_health_topic:
         get_pipeline().last_mental_health_topic[session_id] = last_mental_health_topic
 
+    is_blank_message = not message.strip()
+
     logger.info(
         "POST /api/chat/stream — session=%s message_len=%d",
         session_id,
@@ -250,6 +272,30 @@ def chat_stream() -> Response:
 
     def generate() -> Any:
         yield sse({"type": "session", "session_id": session_id})
+        if is_blank_message:
+            yield sse(
+                {
+                    "type": "metadata",
+                    "data": {
+                        "route": "blank_message",
+                        "intent": "blank_message",
+                        "language": "en",
+                    },
+                }
+            )
+            yield sse({"type": "token", "text": BLANK_MESSAGE_RESPONSE})
+            yield sse(
+                {
+                    "type": "done",
+                    "data": {
+                        "route": "blank_message",
+                        "intent": "blank_message",
+                        "response": BLANK_MESSAGE_RESPONSE,
+                        "language": "en",
+                    },
+                }
+            )
+            return
         try:
             for event in get_pipeline().stream(message, session_id):
                 yield sse(event)

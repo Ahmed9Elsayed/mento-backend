@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.git/
+.pytest_cache/
+.ruff_cache/
 .venv/
 venv/
 ENV/
@@ -18,5 +21,9 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 node_modules/
+static/
+templates/
+tests/
 *.log
 index_metadata.json
+uv.lock

@@ -7,6 +7,8 @@ INTENTS = {
     "out_of_scope",
 }
 
+BLANK_MESSAGE_RESPONSE = "I'm listening, and I'm here whenever you're ready to talk."
+
 SUPPORTED_LANGUAGES = (
     "ar, bg, de, el, en, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh"
 )
