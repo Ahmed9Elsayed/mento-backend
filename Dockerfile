@@ -14,9 +14,12 @@ WORKDIR /build
 
 COPY requirements.txt ./
 RUN python -m venv "$VIRTUAL_ENV"
+
+# OPTIMIZATION: Install CPU-only torch first so subsequent packages reuse it
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install -r requirements.txt gunicorn
+    && python -m pip install torch --index-url https://download.pytorch.org/whl/cpu \
+    && python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt gunicorn
 
 FROM python:3.12-slim AS runtime
 
