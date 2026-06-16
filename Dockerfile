@@ -2,24 +2,28 @@
 
 FROM python:3.12-slim AS builder
 
+# Install uv installer tool
+COPY --from=astralsh/uv:latest /uv /uvx /bin/
+
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TOKENIZERS_PARALLELISM=false \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
+    UV_LINK_MODE=copy
 
 WORKDIR /build
 
-COPY requirements.txt ./
-RUN python -m venv "$VIRTUAL_ENV"
+# Copy configuration files for uv package alignment
+COPY pyproject.toml uv.lock ./
 
-# OPTIMIZATION: Install CPU-only torch first so subsequent packages reuse it
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install torch --index-url https://download.pytorch.org/whl/cpu \
-    && python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt gunicorn
+# Create virtual environment and install optimized CPU torch + your dynamically updated project dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv "$VIRTUAL_ENV" \
+    && uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
+    && uv pip install --extra-index-url https://download.pytorch.org/whl/cpu gunicorn \
+    && uv sync --frozen --no-dev
 
 FROM python:3.12-slim AS runtime
 
@@ -27,7 +31,6 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TOKENIZERS_PARALLELISM=false \
     HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
     HF_HOME=/tmp/huggingface \
