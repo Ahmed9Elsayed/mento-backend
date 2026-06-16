@@ -34,7 +34,7 @@ jobs:
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
         run: |
-          uv sync --extra test --dev  # Automatically syncs all dependencies
+          uv sync
           uv run pytest tests/
 
   build-and-deploy:
