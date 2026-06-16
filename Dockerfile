@@ -15,15 +15,15 @@ ENV VIRTUAL_ENV=/opt/venv \
 
 WORKDIR /build
 
-# Copy configuration files for uv package alignment
-COPY pyproject.toml uv.lock ./
+# OPTIMIZATION: Only copy pyproject.toml. We will let uv generate the lockfile in the cloud!
+COPY pyproject.toml ./
 
 # Create virtual environment and install optimized CPU torch + your dynamically updated project dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv "$VIRTUAL_ENV" \
     && uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
     && uv pip install --extra-index-url https://download.pytorch.org/whl/cpu gunicorn \
-    && uv sync --frozen --no-dev
+    && uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
