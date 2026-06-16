@@ -273,7 +273,9 @@ def chat() -> Any:
             elif event_type == "done":
                 # "done" is always the last event and carries the fully-populated
                 # RouteResult (including emotion, chunks, etc.)
-                metadata = event.get("data", {})
+                done_data = event.get("data", {})
+                if done_data:
+                    metadata = done_data
             elif event_type == "metadata" and not metadata:
                 # fallback: capture first metadata event in case "done" is missing
                 route_data = event.get("data", {})
