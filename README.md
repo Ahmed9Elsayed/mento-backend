@@ -403,6 +403,37 @@ The workflow also uploads these files as the `docker-cache-verification` artifac
 - `second-build.log`
 - `cache-summary.txt`
 
+## System Monitoring & Metrics
+
+The backend API is instrumented with OpenTelemetry to export telemetry data to Axiom.
+
+### Selected Metrics
+
+1. **`intent_distribution` (Model/NLP-related):** A counter that tracks the frequency of each intent (e.g., `greeting`, `rag_pipeline`, `blank_message`) classified by the NLP router. This helps monitor what types of interactions users are having with the chatbot and adjust focus areas accordingly.
+2. **`response_latency` (Model/NLP-related):** A histogram measuring the time taken to process and generate responses. Crucial for monitoring user experience and LLM/RAG generation speed.
+3. **`rag_retrieval_scores` (Model/NLP-related):** A histogram of similarity scores from the Qdrant vector database. Helps evaluate the quality and confidence of retrieved contexts for RAG.
+4. **`feedback_vote_ratios` (Data-related):** A counter that logs positive and negative user feedback votes (`thumbs_up`, `thumbs_down`). This metric measures response quality and user satisfaction over time.
+5. **`prompt_message_length` & `response_message_length` (Data-related):** Histograms tracking character counts for inputs and outputs. Useful for analyzing user verbosity and understanding LLM response verbosity.
+6. **`server_request_count` (Server-related):** A counter that tracks total HTTP requests to specific endpoints (`/chat`, `/feedback`, `/health`). This helps understand server load and application usage trends.
+
+### Running the OpenTelemetry Collector
+
+To export these metrics to Axiom:
+1. Create a dataset and generate an API Token in Axiom.
+2. Add them to your `.env` file:
+   ```env
+   AXIOM_TOKEN="xaat-your-token"
+   AXIOM_DATASET="your-dataset"
+   ```
+3. Run the OpenTelemetry Collector using the provided `otel-collector-config.yaml` and `.env` files:
+   ```bash
+   docker run --rm -v "${PWD}/otel-collector-config.yaml:/etc/otelcol/config.yaml" -p 4317:4317 -p 4318:4318 --env-file .env otel/opentelemetry-collector:latest
+   ```
+
+### Axiom Dashboard
+
+![Axiom Dashboard Screenshot](PLACEHOLDER_FOR_DASHBOARD_SCREENSHOT)
+
 ## Deployment
 
 The container is configured for platforms that expect the app to listen on

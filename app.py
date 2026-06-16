@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from functools import lru_cache
 from typing import Any
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
+
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 from feedback_service import FeedbackLogger, normalize_feedback
 from mento_pipeline import MentoPipeline
@@ -36,6 +44,66 @@ CORS(
     resources={r"/*": {"origins": "*"}},
     supports_credentials=False,
 )
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry Monitoring
+# ---------------------------------------------------------------------------
+try:
+    resource = Resource(attributes={"service.name": "mento-backend"})
+    reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    provider = MeterProvider(resource=resource, metric_readers=[reader])
+    metrics.set_meter_provider(provider)
+    FlaskInstrumentor().instrument_app(app)
+
+    meter = metrics.get_meter("mento")
+    intent_counter = meter.create_counter(
+        "intent_distribution", description="Distribution of detected intents"
+    )
+    feedback_counter = meter.create_counter(
+        "feedback_vote_ratios", description="Ratio of thumbs up vs thumbs down"
+    )
+    request_counter = meter.create_counter("server_request_count", description="Number of requests")
+    latency_histogram = meter.create_up_down_counter(
+        "response_latency", unit="ms", description="Response latency in milliseconds"
+    )
+    rag_score_histogram = meter.create_up_down_counter(
+        "rag_retrieval_scores", description="Scores of RAG retrieved chunks"
+    )
+    prompt_length_histogram = meter.create_up_down_counter(
+        "prompt_message_length", unit="chars", description="Prompt message length in characters"
+    )
+    response_length_histogram = meter.create_up_down_counter(
+        "response_message_length", unit="chars", description="Response message length in characters"
+    )
+except Exception as exc:
+    logger.warning("Failed to initialize OpenTelemetry metrics: %s", exc)
+
+    class DummyCounter:
+        def add(self, amount, attributes=None):
+            pass
+
+    class DummyUpDownCounter:
+        def add(self, amount, attributes=None):
+            pass
+
+    intent_counter = DummyCounter()
+    feedback_counter = DummyCounter()
+    request_counter = DummyCounter()
+    latency_histogram = DummyUpDownCounter()
+    rag_score_histogram = DummyUpDownCounter()
+    prompt_length_histogram = DummyUpDownCounter()
+    response_length_histogram = DummyUpDownCounter()
+
+
+@app.before_request
+def count_requests():
+    if request.path in ["/chat", "/api/chat/stream"]:
+        payload = request.get_json(silent=True) or {}
+        if not str(payload.get("message") or "").strip():
+            return
+    if request.path in ["/chat", "/feedback", "/api/chat/stream", "/health"]:
+        request_counter.add(1, {"endpoint": request.path})
+
 
 logger.info("Mento backend starting — host=%s port=%s", settings.flask_host, settings.flask_port)
 
@@ -189,6 +257,8 @@ def chat() -> Any:
         )
 
     logger.info("POST /chat — session=%s message_len=%d", session_id, len(message))
+    prompt_length_histogram.add(len(message), {"session_id": session_id})
+    start_time = time.perf_counter()
 
     # Collect all events from the streaming pipeline into a single response
     response_text = ""
@@ -200,10 +270,14 @@ def chat() -> Any:
             if event_type == "token":
                 # pipeline yields {"type": "token", "text": "..."} (not "content")
                 response_text += event.get("text", "")
-            elif event_type == "metadata":
-                # pipeline yields {"type": "metadata", "data": asdict(RouteResult)}
+            elif event_type == "done":
+                # "done" is always the last event and carries the fully-populated
+                # RouteResult (including emotion, chunks, etc.)
+                metadata = event.get("data", {})
+            elif event_type == "metadata" and not metadata:
+                # fallback: capture first metadata event in case "done" is missing
                 route_data = event.get("data", {})
-                if route_data.get("route"):   # top-level RouteResult event
+                if route_data.get("route"):
                     metadata = route_data
             elif event_type == "error":
                 error_msg = event.get("message", "An error occurred")
@@ -216,9 +290,7 @@ def chat() -> Any:
 
         # Extract emotion string from nested dict (RouteResult.emotion is a dict)
         emotion_raw = metadata.get("emotion")
-        emotion_str = (
-            emotion_raw.get("emotion") if isinstance(emotion_raw, dict) else emotion_raw
-        )
+        emotion_str = emotion_raw.get("emotion") if isinstance(emotion_raw, dict) else emotion_raw
 
         logger.info(
             "POST /chat — completed session=%s response_len=%d route=%s",
@@ -226,13 +298,22 @@ def chat() -> Any:
             len(response_text),
             metadata.get("route", "unknown"),
         )
+        intent = metadata.get("intent") or metadata.get("route") or "unknown"
+        intent_counter.add(1, {"intent": intent})
+
+        response_length_histogram.add(len(response_text), {"session_id": session_id})
+        for i, chunk in enumerate(metadata.get("chunks", [])):
+            if chunk.get("score") is not None:
+                rag_score_histogram.add(float(chunk["score"]), {"session_id": session_id, "chunk_index": i})
+        latency_histogram.add((time.perf_counter() - start_time) * 1000, {"endpoint": "/chat", "session_id": session_id})
+
         return jsonify(
             {
                 "response": response_text,
                 "session_id": session_id,
                 "route": metadata.get("route"),
                 "emotion": emotion_str,
-                "language": metadata.get("language"),   # "language" = verified language
+                "language": metadata.get("language"),  # "language" = verified language
             }
         )
 
@@ -255,9 +336,7 @@ def chat_stream() -> Response:
     payload = request.get_json(silent=True) or {}
     message = str(payload.get("message") or "")
     session_id = str(payload.get("session_id") or uuid.uuid4())
-    last_mental_health_topic = str(
-        payload.get("last_mental_health_topic") or ""
-    ).strip()
+    last_mental_health_topic = str(payload.get("last_mental_health_topic") or "").strip()
 
     if last_mental_health_topic:
         get_pipeline().last_mental_health_topic[session_id] = last_mental_health_topic
@@ -271,6 +350,9 @@ def chat_stream() -> Response:
     )
 
     def generate() -> Any:
+        start_time = time.perf_counter()
+        if not is_blank_message:
+            prompt_length_histogram.add(len(message), {"session_id": session_id})
         yield sse({"type": "session", "session_id": session_id})
         if is_blank_message:
             yield sse(
@@ -297,8 +379,23 @@ def chat_stream() -> Response:
             )
             return
         try:
+            final_metadata = {}
+            response_len = 0
             for event in get_pipeline().stream(message, session_id):
+                if event.get("type") == "token":
+                    response_len += len(event.get("text", ""))
+                if event.get("type") == "metadata" and event.get("data", {}).get("route"):
+                    final_metadata = event.get("data", {})
                 yield sse(event)
+            intent = final_metadata.get("intent") or final_metadata.get("route") or "unknown"
+            intent_counter.add(1, {"intent": intent})
+            response_length_histogram.add(response_len, {"session_id": session_id})
+            for i, chunk in enumerate(final_metadata.get("chunks", [])):
+                if chunk.get("score") is not None:
+                    rag_score_histogram.add(float(chunk["score"]), {"session_id": session_id, "chunk_index": i})
+            latency_histogram.add(
+                (time.perf_counter() - start_time) * 1000, {"endpoint": "/api/chat/stream", "session_id": session_id}
+            )
             logger.info("POST /api/chat/stream — stream complete session=%s", session_id)
         except Exception as exc:
             logger.error(
@@ -355,6 +452,7 @@ def submit_feedback() -> Any:
 
     try:
         get_feedback_logger().append(query, response_text, feedback)
+        feedback_counter.add(1, {"vote": feedback})
         logger.info("POST /feedback — feedback logged successfully")
     except ValueError as exc:
         logger.warning("POST /feedback — validation error: %s", exc)

@@ -57,3 +57,8 @@ coverage.xml
 
 # Docker
 .docker/
+
+
+# Steps for axiom and run the project (by Mostafa Mamdouh)
+axiom_setup_steps.txt
+run_project_steps.txt
