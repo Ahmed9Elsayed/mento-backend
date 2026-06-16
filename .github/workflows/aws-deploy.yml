@@ -35,7 +35,7 @@ jobs:
           QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
         run: |
           uv sync
-          uv run pytest tests/
+          uv run --with pytest pytest tests/
 
   build-and-deploy:
     name: Build & Push to Amazon ECR
