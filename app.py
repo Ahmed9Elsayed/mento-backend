@@ -14,6 +14,8 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics.export import AggregationTemporality
+from opentelemetry.sdk.metrics import Counter, UpDownCounter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
@@ -50,7 +52,13 @@ CORS(
 # ---------------------------------------------------------------------------
 try:
     resource = Resource(attributes={"service.name": "mento-backend"})
-    reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    exporter = OTLPMetricExporter(
+        preferred_temporality={
+            Counter: AggregationTemporality.DELTA,
+            UpDownCounter: AggregationTemporality.DELTA,
+        }
+    )
+    reader = PeriodicExportingMetricReader(exporter)
     provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(provider)
     FlaskInstrumentor().instrument_app(app)
@@ -63,17 +71,17 @@ try:
         "feedback_vote_ratios", description="Ratio of thumbs up vs thumbs down"
     )
     request_counter = meter.create_counter("server_request_count", description="Number of requests")
-    latency_histogram = meter.create_up_down_counter(
-        "response_latency", unit="ms", description="Response latency in milliseconds"
+    latency_counter = meter.create_counter(
+        "response_latency_ms", description="Response latency bucketed in milliseconds"
     )
-    rag_score_histogram = meter.create_up_down_counter(
-        "rag_retrieval_scores", description="Scores of RAG retrieved chunks"
+    rag_score_counter = meter.create_counter(
+        "rag_retrieval_scores", description="RAG retrieval score buckets"
     )
-    prompt_length_histogram = meter.create_up_down_counter(
-        "prompt_message_length", unit="chars", description="Prompt message length in characters"
+    prompt_length_counter = meter.create_counter(
+        "prompt_message_length_chars", description="Prompt message length bucketed in characters"
     )
-    response_length_histogram = meter.create_up_down_counter(
-        "response_message_length", unit="chars", description="Response message length in characters"
+    response_length_counter = meter.create_counter(
+        "response_message_length_chars", description="Response message length bucketed in characters"
     )
 except Exception as exc:
     logger.warning("Failed to initialize OpenTelemetry metrics: %s", exc)
@@ -82,17 +90,13 @@ except Exception as exc:
         def add(self, amount, attributes=None):
             pass
 
-    class DummyUpDownCounter:
-        def add(self, amount, attributes=None):
-            pass
-
     intent_counter = DummyCounter()
     feedback_counter = DummyCounter()
     request_counter = DummyCounter()
-    latency_histogram = DummyUpDownCounter()
-    rag_score_histogram = DummyUpDownCounter()
-    prompt_length_histogram = DummyUpDownCounter()
-    response_length_histogram = DummyUpDownCounter()
+    latency_counter = DummyCounter()
+    rag_score_counter = DummyCounter()
+    prompt_length_counter = DummyCounter()
+    response_length_counter = DummyCounter()
 
 
 @app.before_request
@@ -153,6 +157,32 @@ def public_error(exc: Exception) -> str:
             "Please try again after confirming Flask, Groq, and Qdrant are reachable."
         )
     return str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Metric bucket helpers (counters replace histograms for Axiom compatibility)
+# ---------------------------------------------------------------------------
+def latency_bucket(ms: float) -> str:
+    if ms < 500: return "<500ms"
+    if ms < 1000: return "500ms-1s"
+    if ms < 5000: return "1s-5s"
+    if ms < 15000: return "5s-15s"
+    return ">15s"
+
+
+def rag_score_bucket(score: float) -> str:
+    if score < 0.3: return "<0.3"
+    if score < 0.5: return "0.3-0.5"
+    if score < 0.7: return "0.5-0.7"
+    return ">=0.7"
+
+
+def length_bucket(chars: int) -> str:
+    if chars < 50: return "<50"
+    if chars < 150: return "50-150"
+    if chars < 300: return "150-300"
+    if chars < 500: return "300-500"
+    return ">500"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +287,7 @@ def chat() -> Any:
         )
 
     logger.info("POST /chat — session=%s message_len=%d", session_id, len(message))
-    prompt_length_histogram.add(len(message), {"session_id": session_id})
+    prompt_length_counter.add(1, {"endpoint": "/chat", "bucket": length_bucket(len(message))})
     start_time = time.perf_counter()
 
     # Collect all events from the streaming pipeline into a single response
@@ -301,11 +331,12 @@ def chat() -> Any:
         intent = metadata.get("intent") or metadata.get("route") or "unknown"
         intent_counter.add(1, {"intent": intent})
 
-        response_length_histogram.add(len(response_text), {"session_id": session_id})
-        for i, chunk in enumerate(metadata.get("chunks", [])):
+        response_length_counter.add(1, {"endpoint": "/chat", "bucket": length_bucket(len(response_text))})
+        for chunk in metadata.get("chunks", []):
             if chunk.get("score") is not None:
-                rag_score_histogram.add(float(chunk["score"]), {"session_id": session_id, "chunk_index": i})
-        latency_histogram.add((time.perf_counter() - start_time) * 1000, {"endpoint": "/chat", "session_id": session_id})
+                rag_score_counter.add(1, {"endpoint": "/chat", "bucket": rag_score_bucket(float(chunk["score"]))})
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        latency_counter.add(1, {"endpoint": "/chat", "bucket": latency_bucket(latency_ms)})
 
         return jsonify(
             {
@@ -352,7 +383,7 @@ def chat_stream() -> Response:
     def generate() -> Any:
         start_time = time.perf_counter()
         if not is_blank_message:
-            prompt_length_histogram.add(len(message), {"session_id": session_id})
+            prompt_length_counter.add(1, {"endpoint": "/api/chat/stream", "bucket": length_bucket(len(message))})
         yield sse({"type": "session", "session_id": session_id})
         if is_blank_message:
             yield sse(
@@ -389,13 +420,12 @@ def chat_stream() -> Response:
                 yield sse(event)
             intent = final_metadata.get("intent") or final_metadata.get("route") or "unknown"
             intent_counter.add(1, {"intent": intent})
-            response_length_histogram.add(response_len, {"session_id": session_id})
-            for i, chunk in enumerate(final_metadata.get("chunks", [])):
+            response_length_counter.add(1, {"endpoint": "/api/chat/stream", "bucket": length_bucket(response_len)})
+            for chunk in final_metadata.get("chunks", []):
                 if chunk.get("score") is not None:
-                    rag_score_histogram.add(float(chunk["score"]), {"session_id": session_id, "chunk_index": i})
-            latency_histogram.add(
-                (time.perf_counter() - start_time) * 1000, {"endpoint": "/api/chat/stream", "session_id": session_id}
-            )
+                    rag_score_counter.add(1, {"endpoint": "/api/chat/stream", "bucket": rag_score_bucket(float(chunk["score"]))})
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            latency_counter.add(1, {"endpoint": "/api/chat/stream", "bucket": latency_bucket(latency_ms)})
             logger.info("POST /api/chat/stream — stream complete session=%s", session_id)
         except Exception as exc:
             logger.error(

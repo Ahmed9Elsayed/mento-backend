@@ -432,7 +432,16 @@ To export these metrics to Axiom:
 
 ### Axiom Dashboard
 
-![Axiom Dashboard Screenshot](PLACEHOLDER_FOR_DASHBOARD_SCREENSHOT)
+Below are the charts built in Axiom to visualize the application's telemetry and metrics:
+
+#### Intent Distribution, Latency, & Retrieval Scores
+![Dashboard Part 1](assets/dashboard_part1.png)
+
+#### Feedback Ratios & Message Lengths
+![Dashboard Part 2](assets/dashboard_part2.png)
+
+#### Server Requests
+![Dashboard Part 3](assets/dashboard_part3.png)
 
 ## Deployment
 
