@@ -45,6 +45,7 @@ RUN addgroup --system mento \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=mento:mento app.py components.py feedback_service.py mento_pipeline.py prompts.py rag_service.py settings.py ./
+ARG CACHE_BUST=1
 COPY --chown=mento:mento models/module1 ./models/module1
 
 USER mento
