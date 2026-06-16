@@ -26,4 +26,3 @@ templates/
 tests/
 *.log
 index_metadata.json
-uv.lock
