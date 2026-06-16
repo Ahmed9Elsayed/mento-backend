@@ -8,22 +8,19 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    TOKENIZERS_PARALLELISM=false \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
-    UV_LINK_MODE=copy
+    PYTHONUNBUFFERED=1
 
 WORKDIR /build
 
-# OPTIMIZATION: Only copy pyproject.toml. We will let uv generate the lockfile in the cloud!
-COPY pyproject.toml ./
+# Since .dockerignore is fixed, we copy both safely
+COPY pyproject.toml uv.lock ./
 
-# Create virtual environment and install optimized CPU torch + your dynamically updated project dependencies
+# Force uv to install EVERYTHING directly into our VIRTUAL_ENV
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv "$VIRTUAL_ENV" \
     && uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
-    && uv pip install --extra-index-url https://download.pytorch.org/whl/cpu gunicorn \
-    && uv sync --no-dev
+    && uv pip install gunicorn \
+    && uv pip install -r pyproject.toml
 
 FROM python:3.12-slim AS runtime
 
