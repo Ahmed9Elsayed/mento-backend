@@ -3,7 +3,7 @@
 FROM python:3.12-slim AS builder
 
 # Install uv installer tool
-COPY --from=astralsh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
