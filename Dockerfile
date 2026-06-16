@@ -2,24 +2,25 @@
 
 FROM python:3.12-slim AS builder
 
+# Install uv installer tool
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TOKENIZERS_PARALLELISM=false \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1
+    PYTHONUNBUFFERED=1
 
 WORKDIR /build
 
-COPY requirements.txt ./
-RUN python -m venv "$VIRTUAL_ENV"
+# Since .dockerignore is fixed, we copy both safely
+COPY pyproject.toml uv.lock ./
 
-# OPTIMIZATION: Install CPU-only torch first so subsequent packages reuse it
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install torch --index-url https://download.pytorch.org/whl/cpu \
-    && python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt gunicorn
+# Force uv to install EVERYTHING directly into our VIRTUAL_ENV
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv "$VIRTUAL_ENV" \
+    && uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
+    && uv pip install gunicorn \
+    && uv pip install -r pyproject.toml
 
 FROM python:3.12-slim AS runtime
 
@@ -27,7 +28,6 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TOKENIZERS_PARALLELISM=false \
     HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
     HF_HOME=/tmp/huggingface \
@@ -45,6 +45,7 @@ RUN addgroup --system mento \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=mento:mento app.py components.py feedback_service.py mento_pipeline.py prompts.py rag_service.py settings.py ./
+ARG CACHE_BUST=1
 COPY --chown=mento:mento models/module1 ./models/module1
 
 USER mento
