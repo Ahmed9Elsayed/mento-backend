@@ -6,8 +6,8 @@ on:
       - main
 
 env:
-  AWS_REGION: us-east-1                  
-  ECR_REPOSITORY: mento-backend          
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: mento-backend
 
 jobs:
   build-and-deploy:
@@ -39,46 +39,76 @@ jobs:
       - name: Build, tag, and push Docker image to ECR
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} 
-          LATEST_TAG: latest           
+          IMAGE_TAG: ${{ github.sha }}
+          LATEST_TAG: latest
         run: |
           docker build -t $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG -t $REGISTRY/${{ env.ECR_REPOSITORY }}:$LATEST_TAG .
           docker push $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
           docker push $REGISTRY/${{ env.ECR_REPOSITORY }}:$LATEST_TAG
 
+      - name: Copy OTel Collector config to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "otel-collector-config.yaml"
+          target: "~/"
+
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          # Pulling your API keys from GitHub Secrets
+          # Pulling your API keys and observability config from GitHub Secrets
           INTENT_GROQ_API_KEY: ${{ secrets.INTENT_GROQ_API_KEY }}
           RAG_GROQ_API_KEY: ${{ secrets.RAG_GROQ_API_KEY }}
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           # Passing the environment variables into the SSH session
-          envs: INTENT_GROQ_API_KEY,RAG_GROQ_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION
+          envs: INTENT_GROQ_API_KEY,RAG_GROQ_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION,AXIOM_TOKEN,AXIOM_DATASET,ECR_REGISTRY
           script: |
             # 1. Log Docker into AWS ECR
-            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 404147232508.dkr.ecr.us-east-1.amazonaws.com
-            
-            # 2. Stop and remove the old container and image
+            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+            # 2. Create a shared Docker network if it doesn't already exist
+            sudo docker network create mento-net || true
+
+            # 3. Pull the fresh app image
+            sudo docker pull "$ECR_REGISTRY"/mento-backend:latest
+
+            # 4. Pull the OTel Collector image
+            sudo docker pull otel/opentelemetry-collector:latest
+
+            # 5. Stop and remove old containers (collector first, then app)
+            sudo docker rm -f otel-collector || true
             sudo docker rm -f mento-api || true
-            sudo docker rmi -f 404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest || true
-            
-            # 3. Pull the fresh image
-            sudo docker pull 404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest
-            
-            # 4. Launch the new container using the injected secrets
+
+            # 6. Launch the OTel Collector, attached to the shared network
+            sudo docker run -d \
+              --name otel-collector \
+              --network mento-net \
+              -p 4317:4317 -p 4318:4318 \
+              -v ~/otel-collector-config.yaml:/etc/otelcol/config.yaml \
+              -e AXIOM_TOKEN="$AXIOM_TOKEN" \
+              -e AXIOM_DATASET="$AXIOM_DATASET" \
+              otel/opentelemetry-collector:latest
+
+            # 7. Launch the app container on the same network, pointing it at the collector
             sudo docker run -d -p 7860:7860 \
+              --network mento-net \
               -e INTENT_GROQ_API_KEY="$INTENT_GROQ_API_KEY" \
               -e RAG_GROQ_API_KEY="$RAG_GROQ_API_KEY" \
               -e QDRANT_URL="$QDRANT_URL" \
               -e QDRANT_API_KEY="$QDRANT_API_KEY" \
               -e QDRANT_COLLECTION="$QDRANT_COLLECTION" \
               -e USE_LOCAL_EMOTION_MODEL="false" \
+              -e OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4317" \
               --name mento-api \
-              404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest
+              "$ECR_REGISTRY"/mento-backend:latest
