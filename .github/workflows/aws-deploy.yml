@@ -45,3 +45,40 @@ jobs:
           docker build -t $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG -t $REGISTRY/${{ env.ECR_REPOSITORY }}:$LATEST_TAG .
           docker push $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
           docker push $REGISTRY/${{ env.ECR_REPOSITORY }}:$LATEST_TAG
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          # Pulling your API keys from GitHub Secrets
+          INTENT_GROQ_API_KEY: ${{ secrets.INTENT_GROQ_API_KEY }}
+          RAG_GROQ_API_KEY: ${{ secrets.RAG_GROQ_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # Passing the environment variables into the SSH session
+          envs: INTENT_GROQ_API_KEY,RAG_GROQ_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION
+          script: |
+            # 1. Log Docker into AWS ECR
+            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 404147232508.dkr.ecr.us-east-1.amazonaws.com
+            
+            # 2. Stop and remove the old container and image
+            sudo docker rm -f mento-api || true
+            sudo docker rmi -f 404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest || true
+            
+            # 3. Pull the fresh image
+            sudo docker pull 404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest
+            
+            # 4. Launch the new container using the injected secrets
+            sudo docker run -d -p 7860:7860 \
+              -e INTENT_GROQ_API_KEY="$INTENT_GROQ_API_KEY" \
+              -e RAG_GROQ_API_KEY="$RAG_GROQ_API_KEY" \
+              -e QDRANT_URL="$QDRANT_URL" \
+              -e QDRANT_API_KEY="$QDRANT_API_KEY" \
+              -e QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+              -e USE_LOCAL_EMOTION_MODEL="false" \
+              --name mento-api \
+              404147232508.dkr.ecr.us-east-1.amazonaws.com/mento-backend:latest
