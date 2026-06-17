@@ -371,7 +371,6 @@ class EmotionDetector:
 
     @cached_property
     def model(self) -> Any:
-        import torch
         from transformers import AutoModelForSequenceClassification
 
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -645,6 +644,17 @@ def is_mental_health_concern(*texts: str) -> bool:
 
     patterns = [
         r"\bmental health\b",
+        r"\bmwntal health\b",
+        r"\bmentl health\b",
+        r"\bmenatl health\b",
+        r"\bsalud mental\b",
+        r"\bsant[eé] mentale\b",
+        r"\bpsychische gesundheit\b",
+        r"\bsaude mental\b",
+        r"\bsalute mentale\b",
+        r"الصحة النفسية",
+        r"मानसिक स्वास्थ्य",
+        r"心理健康",
         r"\bfeel(?:ing|ings)?\b",
         r"\bemotion(?:al|s)?\b",
         r"\bworthless\b",
@@ -658,11 +668,24 @@ def is_mental_health_concern(*texts: str) -> bool:
         r"\bstress(?:ed)?\b",
         r"\bsad(?:ness)?\b",
         r"\bdepress(?:ed|ion)?\b",
+        r"\bdepres(?:ed|sion)?\b",
+        r"\btriste\b",
+        r"\bdeprimid[oa]\b",
+        r"\bdeprim[eé]\b",
+        r"\bdepressiv\b",
+        r"حزين",
+        r"اكتئاب",
+        r"उदास",
+        r"难过",
+        r"抑郁",
         r"\blonely\b",
         r"\bhopeless\b",
         r"\bgrief\b",
         r"\btrauma\b",
         r"\btherapy\b",
+        r"\bterapia\b",
+        r"\bth[eé]rapie\b",
+        r"علاج نفسي",
         r"\bcounsel(?:ing|ling|or)?\b",
         r"\bcope\b",
         r"\bcoping\b",
@@ -670,6 +693,16 @@ def is_mental_health_concern(*texts: str) -> bool:
         r"\bsuicide\b",
         r"\bsuicidal\b",
         r"\bself[- ]?harm\b",
+        r"\bansiedad\b",
+        r"\banxi[eé]t[eé]\b",
+        r"\bestres\b",
+        r"\bstress\b",
+        r"قلق",
+        r"توتر",
+        r"चिंता",
+        r"तनाव",
+        r"焦虑",
+        r"压力",
         r"\bأشعر\b",
         r"\bمشاعر\b",
         r"\bقلق\b",
@@ -680,6 +713,150 @@ def is_mental_health_concern(*texts: str) -> bool:
         r"\bبلا قيمة\b",
     ]
     return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def is_mixed_support_task_request(*texts: str) -> bool:
+    joined = " ".join(text for text in texts if text)
+    normalized = re.sub(r"\s+", " ", joined.strip().lower())
+    if not normalized or not is_mental_health_concern(normalized):
+        return False
+
+    task_intent_patterns = [
+        r"\bcan you\b",
+        r"\bcould you\b",
+        r"\bplease\b",
+        r"\bi need\b",
+        r"\bi want\b",
+        r"\bmake me\b",
+        r"\bcreate\b",
+        r"\bbuild\b",
+        r"\bwrite\b",
+        r"\bcode\b",
+        r"\bgive me\b",
+        r"\brecommend\b",
+        r"\bsuggest\b",
+        r"\bsequence\b",
+        r"\broadmap\b",
+        r"\bplan\b",
+        r"\blearn\b",
+        r"\bstudy\b",
+        r"\bpuedes\b",
+        r"\bnecesito\b",
+        r"\bquiero\b",
+        r"\bdame\b",
+        r"\bcrear\b",
+        r"\bconstruir\b",
+        r"\bescribir\b",
+        r"\baprender\b",
+        r"\bestudiar\b",
+        r"\bsecuencia\b",
+        r"\bpeux[- ]tu\b",
+        r"\bpouvez[- ]vous\b",
+        r"\bje veux\b",
+        r"\bj'ai besoin\b",
+        r"\bdonne[- ]moi\b",
+        r"\bcr[eé]er\b",
+        r"\b[eé]crire\b",
+        r"\bapprendre\b",
+        r"\b[eé]tudier\b",
+        r"هل يمكنك",
+        r"ممكن",
+        r"أريد",
+        r"اريد",
+        r"احتاج",
+        r"اعطني",
+        r"خطة",
+        r"تعلم",
+        r"اتعلم",
+        r"دورات",
+        r"बना",
+        r"चाहता",
+        r"मुझे चाहिए",
+        r"सीख",
+        r"योजना",
+        r"可以",
+        r"帮我",
+        r"创建",
+        r"学习",
+        r"计划",
+        r"课程",
+    ]
+    practical_domain_patterns = [
+        r"\bpython\b",
+        r"\bpythn\b",
+        r"\bpyton\b",
+        r"\bjavascript\b",
+        r"\bprogram(?:ming)?\b",
+        r"\bcod(?:e|ing)\b",
+        r"\bgame\b",
+        r"\bapp(?:lication)?\b",
+        r"\baplication\b",
+        r"\bproject\b",
+        r"\bcourse(?:s)?\b",
+        r"\bcurriculum\b",
+        r"\bstudy plan\b",
+        r"\blearning plan\b",
+        r"\bcareer\b",
+        r"\bprofessional\b",
+        r"\bskill(?:s)?\b",
+        r"\bhobb(?:y|ies)\b",
+        r"\buseful subject\b",
+        r"\bcyber\s*security\b",
+        r"\bcybersecurity\b",
+        r"\bethical hacking\b",
+        r"\bhacking\b",
+        r"\bjuego\b",
+        r"\baplicaci[oó]n\b",
+        r"\bproyecto\b",
+        r"\bcurso(?:s)?\b",
+        r"\bhabilidad(?:es)?\b",
+        r"\bciberseguridad\b",
+        r"\bjeu\b",
+        r"\bapplication\b",
+        r"\bprojet\b",
+        r"\bcours\b",
+        r"\bcomp[eé]tence(?:s)?\b",
+        r"\bcybers[eé]curit[eé]\b",
+        r"بايثون",
+        r"لعبة",
+        r"تطبيق",
+        r"مشروع",
+        r"دورة",
+        r"دورات",
+        r"مهارة",
+        r"امن سيبراني",
+        r"الأمن السيبراني",
+        r"पायथन",
+        r"गेम",
+        r"ऐप",
+        r"परियोजना",
+        r"कोर्स",
+        r"साइबर",
+        r"游戏",
+        r"应用",
+        r"项目",
+        r"网络安全",
+    ]
+
+    has_task_intent = any(
+        re.search(pattern, normalized, flags=re.IGNORECASE)
+        for pattern in task_intent_patterns
+    )
+    has_practical_domain = any(
+        re.search(pattern, normalized, flags=re.IGNORECASE)
+        for pattern in practical_domain_patterns
+    )
+    implied_task_patterns = [
+        r"\bapp(?:lication)?\b.*\b(?:in|with)\b.*\b(?:python|pythn|pyton)\b",
+        r"\b(?:python|pythn|pyton)\b.*\bapp(?:lication)?\b",
+        r"\bgame\b.*\b(?:in|with)\b.*\b(?:python|pythn|pyton)\b",
+        r"\b(?:python|pythn|pyton)\b.*\bgame\b",
+    ]
+    has_implied_task = any(
+        re.search(pattern, normalized, flags=re.IGNORECASE)
+        for pattern in implied_task_patterns
+    )
+    return (has_task_intent or has_implied_task) and has_practical_domain
 
 
 def heuristic_guardrail(user_text: str, generated_response: str) -> dict[str, Any]:

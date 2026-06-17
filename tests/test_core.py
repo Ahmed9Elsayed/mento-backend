@@ -9,6 +9,9 @@ All tests run offline with zero API calls or model loading.
 
 from __future__ import annotations
 
+import threading
+from types import SimpleNamespace
+
 import pytest
 
 from components import (
@@ -17,12 +20,12 @@ from components import (
     heuristic_guardrail,
     is_followup_affirmation,
     is_mental_health_concern,
+    is_mixed_support_task_request,
     is_system_identity_question,
     regex_direct_intent,
 )
 from feedback_service import normalize_feedback
-from mento_pipeline import MentoPipeline
-
+from mento_pipeline import MentoPipeline, RouteResult
 
 # ---------------------------------------------------------------------------
 # normalize_feedback
@@ -348,6 +351,33 @@ class TestIsMentalHealthConcern:
 
 
 # ---------------------------------------------------------------------------
+# is_mixed_support_task_request
+# ---------------------------------------------------------------------------
+
+class TestIsMixedSupportTaskRequest:
+    def test_sad_python_game_request_is_detected(self):
+        assert is_mixed_support_task_request(
+            "I am very sad. Can you make me a game in Python?"
+        ) is True
+
+    def test_depressed_course_plan_request_is_detected(self):
+        assert is_mixed_support_task_request(
+            "I feel depressed and want a sequence of ethical hacking courses"
+        ) is True
+
+    def test_spanish_app_request_is_detected(self):
+        assert is_mixed_support_task_request(
+            "me siento triste, puedes crear una app en python"
+        ) is True
+
+    def test_practical_request_without_distress_is_not_detected(self):
+        assert is_mixed_support_task_request("Can you make me a Python game?") is False
+
+    def test_distress_without_practical_task_is_not_detected(self):
+        assert is_mixed_support_task_request("I feel very sad today") is False
+
+
+# ---------------------------------------------------------------------------
 # heuristic_guardrail
 # ---------------------------------------------------------------------------
 
@@ -456,6 +486,177 @@ class TestAddCrisisSupportPrefix:
         already_prefixed = f"{prefix} I hear you."
         result = MentoPipeline._add_crisis_support_prefix(already_prefixed, "en")
         assert result.count(prefix) == 1
+
+
+class TestTaskSupportBoundary:
+    def test_code_response_falls_back_to_boundary_message(self):
+        route = RouteResult(
+            route="support_task",
+            intent="mixed_support_task",
+            translated="I feel sad. Make me a Python game.",
+            language="en",
+            confidence=0.95,
+            layer_used="test",
+            language_hint="en",
+            language_hint_confidence=1.0,
+        )
+        response = MentoPipeline._enforce_task_boundary(route, "```python\nprint('x')\n```")
+        assert "will not complete non-mental-health tasks" in response
+
+    def test_non_code_response_is_kept(self):
+        route = RouteResult(
+            route="support_task",
+            intent="mixed_support_task",
+            translated="I feel sad. Make me a Python game.",
+            language="en",
+            confidence=0.95,
+            layer_used="test",
+            language_hint="en",
+            language_hint_confidence=1.0,
+        )
+        response = MentoPipeline._enforce_task_boundary(route, "Pick one tiny goal.")
+        assert response == "Pick one tiny goal."
+
+
+class TestPipelineHistory:
+    def test_remember_stores_user_and_ai_messages(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+
+        pipeline._remember("session-1", "I feel anxious", "I hear you.")
+
+        history = pipeline.get_history("session-1")
+        assert len(history) == 2
+        assert history[0].content == "I feel anxious"
+        assert history[1].content == "I hear you."
+
+    def test_history_snapshot_is_copy(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+
+        pipeline._remember("session-1", "one", "two")
+        snapshot = pipeline._history_snapshot("session-1")
+        snapshot.clear()
+
+        assert len(pipeline.get_history("session-1")) == 2
+
+    def test_remember_keeps_last_twelve_messages(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+
+        for index in range(7):
+            pipeline._remember("session-1", f"user-{index}", f"assistant-{index}")
+
+        history = pipeline.get_history("session-1")
+        assert len(history) == 12
+        assert history[0].content == "user-1"
+        assert history[-1].content == "assistant-6"
+
+
+class TestPipelineRouting:
+    def test_mixed_support_task_routes_to_support_task(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+        pipeline.last_mental_health_topic = {}
+        pipeline.crisis_detector = SimpleNamespace(
+            assess=lambda *_: SimpleNamespace(is_direct=False)
+        )
+        pipeline.language_detector = SimpleNamespace(
+            detect=lambda _: SimpleNamespace(language="en", confidence=0.9)
+        )
+        pipeline.analyze_message = lambda *_: {
+            "intent": "out_of_scope",
+            "translated": "I am very sad. Can you make me a Python game?",
+            "language": "en",
+            "confidence": 0.8,
+            "layer_used": "Layer 2",
+        }
+
+        route = pipeline.classify(
+            "I am very sad. Can you make me a game in Python?", "session-1"
+        )
+
+        assert route.intent == "mixed_support_task"
+        assert route.route == "support_task"
+        assert "Mixed support task guard" in route.layer_used
+
+
+class TestPipelineStream:
+    def test_support_task_stream_remembers_response(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+        pipeline.last_mental_health_topic = {}
+        pipeline.classify = lambda *_: RouteResult(
+            route="support_task",
+            intent="mixed_support_task",
+            translated="I feel sad. Make me a Python game.",
+            language="en",
+            confidence=0.95,
+            layer_used="test",
+            language_hint="en",
+            language_hint_confidence=1.0,
+        )
+        pipeline._generate_task_support_response = lambda *_: "Pick one tiny goal."
+        pipeline._finalize_response = lambda *_: (
+            "Pick one tiny goal.",
+            {"is_hallucinated": False, "flags": [], "revised_response": None},
+        )
+
+        events = list(pipeline.stream("I feel sad. Make me a Python game.", "session-1"))
+
+        assert events[-1]["type"] == "done"
+        assert events[-1]["data"]["route"] == "support_task"
+        assert pipeline.get_history("session-1")[-1].content == "Pick one tiny goal."
+
+    def test_direct_crisis_stream_sends_two_assistant_messages(self):
+        pipeline = MentoPipeline.__new__(MentoPipeline)
+        pipeline._state_lock = threading.Lock()
+        pipeline.histories = {}
+        pipeline.last_mental_health_topic = {}
+        pipeline.classify = lambda *_: RouteResult(
+            route="direct_crisis",
+            intent="asking_mental_health_question",
+            translated="I want to end my life",
+            language="en",
+            confidence=1.0,
+            layer_used="test",
+            language_hint="en",
+            language_hint_confidence=1.0,
+            response="Immediate crisis response.",
+            crisis={"is_direct": True},
+        )
+
+        def fake_prepare_rag(route, *_):
+            route.emotion = {"emotion": "sadness"}
+            route.chunks = []
+            if False:
+                yield None
+            return "Grounding support response."
+
+        pipeline._prepare_rag = fake_prepare_rag
+        pipeline._finalize_response = lambda _text, response, _language, _chunks=None: (
+            response,
+            {"is_hallucinated": False, "flags": [], "revised_response": None},
+        )
+
+        messages = [""]
+        for event in pipeline.stream("I want to end my life", "session-1"):
+            if event["type"] == "token":
+                messages[-1] += event["text"]
+            elif event["type"] == "new_assistant_message":
+                messages.append("")
+
+        assert messages == [
+            "Immediate crisis response.",
+            "While you reach out for immediate help, let's focus on getting through "
+            "the next few minutes safely. Grounding support response.",
+        ]
+        assert len(pipeline.get_history("session-1")) == 2
 
 
 class TestChunkTraceSummary:

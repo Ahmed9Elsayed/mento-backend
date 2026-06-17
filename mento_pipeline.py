@@ -20,6 +20,7 @@ from components import (
     heuristic_guardrail,
     is_followup_affirmation,
     is_mental_health_concern,
+    is_mixed_support_task_request,
     is_system_identity_question,
 )
 from prompts import (
@@ -28,6 +29,7 @@ from prompts import (
     GUARDRAIL_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
     INTENTS,
+    TASK_SUPPORT_SYSTEM_PROMPT,
 )
 from rag_service import RAGService
 from settings import Settings
@@ -215,6 +217,14 @@ class MentoPipeline:
             llm_result["confidence"] = max(
                 float(llm_result.get("confidence", 0.0)), 0.99
             )
+        elif is_mixed_support_task_request(user_text, llm_result["translated"]):
+            llm_result["intent"] = "mixed_support_task"
+            llm_result["confidence"] = max(
+                float(llm_result.get("confidence", 0.0)), 0.9
+            )
+            llm_result["layer_used"] = (
+                f"{llm_result['layer_used']} + Mixed support task guard"
+            )
         elif self._is_contextual_mental_health_followup(
             user_text, llm_result, session_id
         ):
@@ -242,6 +252,8 @@ class MentoPipeline:
         route = "rag_pipeline" if intent == "asking_mental_health_question" else intent
         if intent in {"greeting", "goodbye", "gratitude", "system_identity"}:
             route = "direct"
+        elif intent == "mixed_support_task":
+            route = "support_task"
         elif intent == "out_of_scope":
             route = "out_of_scope"
 
@@ -344,6 +356,17 @@ class MentoPipeline:
 
         if route.route in {"direct", "out_of_scope"}:
             response = self._generate_direct_response(route, user_text)
+            response, route.guardrails = self._finalize_response(
+                user_text, response, route.language
+            )
+            route.response = response
+            yield from self._emit_answer(response)
+            self._remember(session_id, user_text, response)
+            yield {"type": "done", "data": asdict(route)}
+            return
+
+        if route.route == "support_task":
+            response = self._generate_task_support_response(route, user_text)
             response, route.guardrails = self._finalize_response(
                 user_text, response, route.language
             )
@@ -537,6 +560,42 @@ class MentoPipeline:
             return self._direct_fallback(route)
         return answer.strip()
 
+    def _generate_task_support_response(
+        self, route: RouteResult, user_text: str
+    ) -> str:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=TASK_SUPPORT_SYSTEM_PROMPT),
+                (
+                    "human",
+                    (
+                        "Verified language: {language}\n"
+                        "Cleaned English request: {translated}\n"
+                        "Original user message: {message}"
+                    ),
+                ),
+            ]
+        )
+        chain = prompt | self.direct_llm
+        answer = ""
+        try:
+            for chunk in chain.stream(
+                {
+                    "language": route.language,
+                    "translated": route.translated,
+                    "message": user_text,
+                },
+                config={"metadata": {"route": route.route, "system": "Mento"}},
+            ):
+                token = self._extract_stream_text(chunk)
+                if token:
+                    answer += token
+        except Exception:
+            return self._task_support_fallback(route)
+        if not answer.strip():
+            return self._task_support_fallback(route)
+        return self._enforce_task_boundary(route, answer.strip())
+
     def _finalize_response(
         self,
         user_text: str,
@@ -653,6 +712,36 @@ class MentoPipeline:
         if route.intent == "goodbye":
             return "Take care of yourself. Support is here whenever you need it."
         return "Hello, I'm Mento. I'm here to support your emotional wellbeing."
+
+    @staticmethod
+    def _task_support_fallback(route: RouteResult) -> str:
+        if route.language == "ar":
+            return (
+                "أفهم أنك تريد شيئاً عملياً يساعدك الآن. لا أستطيع تنفيذ مهمة غير "
+                "نفسية بدلاً منك. خطوات سريعة: اختر هدفاً صغيراً، اكتب ما تريد "
+                "أن يحدث، جرّب عشر دقائق فقط، ثم توقف وراجع شعورك."
+            )
+        return (
+            "I hear that you want something practical to focus on. I will not "
+            "complete non-mental-health tasks for you. Quick steps: pick one small "
+            "goal, outline what should happen, try ten minutes, then pause and "
+            "check how you feel."
+        )
+
+    @staticmethod
+    def _enforce_task_boundary(route: RouteResult, response: str) -> str:
+        code_patterns = [
+            r"```",
+            r"(?m)^\s*(?:import|from|def|class)\s+",
+            r"(?m)^\s*(?:while|for|if)\s+.+:",
+            r"\bprint\(",
+            r"\binput\(",
+            r"\bconsole\.log\(",
+            r"(?m)^\s*(?:const|let|var|function)\s+",
+        ]
+        if any(re.search(pattern, response, flags=re.IGNORECASE) for pattern in code_patterns):
+            return MentoPipeline._task_support_fallback(route)
+        return response
 
     @staticmethod
     def _parse_json(raw: str) -> dict[str, Any]:
