@@ -99,12 +99,14 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          FEEDBACK_GOOGLE_SHEET_ID: ${{ secrets.FEEDBACK_GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           # Passing the environment variables into the SSH session
-          envs: INTENT_GROQ_API_KEY,RAG_GROQ_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION,AXIOM_TOKEN,AXIOM_DATASET,ECR_REGISTRY
+          envs: INTENT_GROQ_API_KEY,RAG_GROQ_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION,AXIOM_TOKEN,AXIOM_DATASET,ECR_REGISTRY,FEEDBACK_GOOGLE_SHEET_ID,GOOGLE_SERVICE_ACCOUNT_JSON
           script: |
             # 1. Log Docker into AWS ECR
             aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin "$ECR_REGISTRY"
@@ -140,6 +142,8 @@ jobs:
               -e QDRANT_URL="$QDRANT_URL" \
               -e QDRANT_API_KEY="$QDRANT_API_KEY" \
               -e QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+              -e FEEDBACK_GOOGLE_SHEET_ID="$FEEDBACK_GOOGLE_SHEET_ID" \
+              -e GOOGLE_SERVICE_ACCOUNT_JSON="$GOOGLE_SERVICE_ACCOUNT_JSON" \
               -e USE_LOCAL_EMOTION_MODEL="false" \
               -e OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4317" \
               --name mento-api \
